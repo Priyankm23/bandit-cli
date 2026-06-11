@@ -10,7 +10,7 @@ interface DiscoveredRoute {
   sourceFile: string;
 }
 
-// Scans files for common route definitions
+// Scans files for common route definitions and mounts
 async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
   const routes: DiscoveredRoute[] = [];
   const files = await fg(["src/**/*.{ts,js}", "*.{ts,js}", "routes/**/*.{ts,js}", "controllers/**/*.{ts,js}"], {
@@ -19,12 +19,35 @@ async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
     ignore: ["**/node_modules/**", "**/dist/**", "**/*.test.{ts,js}", "**/*.spec.{ts,js}"],
   });
 
+  const prefixMap = new Map<string, string>();
+
+  // Regex to detect router mounts, e.g. app.use('/api/v1/auth', authRouter) or router.use('/auth', authRouter)
+  // Group 3 matches the path prefix, Group 4 matches the router variable name
+  const mountPattern = /\b([a-zA-Z0-9_]+)\.(use|route|group)\s*\(\s*['"`]([^'"`]+)['"`]\s*,\s*([a-zA-Z0-9_]+)/gi;
+
+  // Read files first to construct prefixMap
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(file, "utf-8");
+      let match;
+      mountPattern.lastIndex = 0;
+      while ((match = mountPattern.exec(content)) !== null) {
+        const prefix = match[3];
+        const routerName = match[4];
+        if (prefix && routerName && routerName !== "express" && routerName !== "cors" && routerName !== "helmet") {
+          prefixMap.set(routerName, prefix);
+        }
+      }
+    } catch {}
+  }
+
   // Regex patterns
-  // 1. Express/Fastify/Hono: router.get('/path', ...) or app.post('/path', ...)
-  const expressPattern = /\b(app|router|route|fastify|hono|api)\.(get|post|put|delete|patch|options|head)\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
-  // 2. NestJS decorators: @Get('/path') or @Post('/path')
+  // 1. Generic Router paths: authRouter.post('/login', ...)
+  // Group 1 matches the router variable, Group 2 matches method, Group 3 matches endpoint path
+  const expressPattern = /\b([a-zA-Z0-9_]+)\.(get|post|put|delete|patch|options|head)\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
+  // 2. NestJS decorators: @Get('/path')
   const nestPattern = /@(Get|Post|Put|Delete|Patch)\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
-  // 3. NestJS controllers to prefix: @Controller('/prefix')
+  // 3. NestJS controllers: @Controller('/prefix')
   const controllerPattern = /@Controller\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
 
   for (const file of files) {
@@ -32,7 +55,7 @@ async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
       const content = fs.readFileSync(file, "utf-8");
       const relativePath = path.relative(projectPath, file);
 
-      // Check NestJS Controller prefix if any
+      // NestJS controller prefix
       let controllerPrefix = "";
       const cMatch = [...content.matchAll(controllerPattern)];
       if (cMatch.length > 0) {
@@ -40,14 +63,25 @@ async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
         if (controllerPrefix === "/") controllerPrefix = "";
       }
 
-      // 1. Check Express-style matches
+      // 1. Express-style
       let match;
       expressPattern.lastIndex = 0;
       while ((match = expressPattern.exec(content)) !== null) {
+        const instanceName = match[1];
         const method = match[2].toUpperCase();
-        let rPath = match[3];
+        const subPath = match[3];
 
-        // Sanitize path variable names if necessary
+        let rPath = subPath;
+        // If the instanceName has a registered mount prefix, prepend it!
+        if (prefixMap.has(instanceName)) {
+          const prefix = prefixMap.get(instanceName)!.replace(/\/$/, "");
+          rPath = `${prefix}/${subPath.replace(/^\//, "")}`;
+        }
+
+        // Clean up double slashes
+        rPath = rPath.replace(/\/+/g, "/");
+        if (!rPath.startsWith("/")) rPath = `/${rPath}`;
+
         routes.push({
           method,
           routePath: rPath,
@@ -55,7 +89,7 @@ async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
         });
       }
 
-      // 2. Check NestJS matches
+      // 2. NestJS
       nestPattern.lastIndex = 0;
       while ((match = nestPattern.exec(content)) !== null) {
         const method = match[1].toUpperCase();
@@ -63,17 +97,16 @@ async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
         if (subPath === "/") subPath = "";
 
         const fullPath = `${controllerPrefix.replace(/\/$/, "")}/${subPath.replace(/^\//, "")}`;
-        const sanitizedFullPath = fullPath.startsWith("/") ? fullPath : `/${fullPath}`;
+        let rPath = fullPath.startsWith("/") ? fullPath : `/${fullPath}`;
+        rPath = rPath.replace(/\/+/g, "/");
 
         routes.push({
           method: method === "DELETE" ? "DELETE" : method,
-          routePath: sanitizedFullPath,
+          routePath: rPath,
           sourceFile: relativePath,
         });
       }
-    } catch (err) {
-      // Ignore reading errors
-    }
+    } catch {}
   }
 
   // Deduplicate routes by method + routePath
@@ -219,11 +252,23 @@ export async function runApiCommand(projectPath: string = ".") {
     finalPath = customPath as string;
   } else {
     finalMethod = selectedRoute.method;
-    finalPath = selectedRoute.routePath;
+
+    // Let the developer confirm and edit the path (highly convenient for prefix additions!)
+    const editPath = await clack.text({
+      message: "Confirm or edit the route path:",
+      defaultValue: selectedRoute.routePath,
+      placeholder: selectedRoute.routePath,
+      validate: (v) => (!v || !v.startsWith("/") ? "Route path must start with a slash '/'" : undefined),
+    });
+
+    if (clack.isCancel(editPath)) {
+      clack.outro("Execution stopped.");
+      return;
+    }
+    finalPath = editPath as string;
   }
 
   // 1. Process Path Parameters if any (e.g. /users/:id or /users/{id})
-  // We look for :name or {name}
   const pathParamPattern = /:([a-zA-Z0-9_]+)|\{([a-zA-Z0-9_]+)\}/g;
   let matches;
   const pathParams: string[] = [];
@@ -246,7 +291,6 @@ export async function runApiCommand(projectPath: string = ".") {
       return;
     }
 
-    // Replace :param or {param}
     resolvedPath = resolvedPath
       .replace(`:${param}`, val as string)
       .replace(`{${param}}`, val as string);
@@ -281,7 +325,7 @@ export async function runApiCommand(projectPath: string = ".") {
     }
   }
 
-  // 3. Process Request Body if POST/PUT/PATCH
+  // 3. Process Request Body if POST/PUT/PATCH (Interactive Key-Value Editor!)
   let requestBody: string | undefined;
   if (["POST", "PUT", "PATCH"].includes(finalMethod)) {
     const enterBody = await clack.confirm({
@@ -295,33 +339,131 @@ export async function runApiCommand(projectPath: string = ".") {
     }
 
     if (enterBody) {
-      const bodyInput = await clack.text({
-        message: "Enter JSON payload:",
-        placeholder: '{"name": "Alice", "email": "alice@gmail.com"}',
-        validate: (v) => {
-          if (!v || !v.trim()) return undefined;
-          try {
-            JSON.parse(v);
-            return undefined;
-          } catch {
-            return "Invalid JSON syntax. Please enter valid JSON.";
-          }
-        },
+      const bodyInputType = await clack.select({
+        message: "How would you like to enter the JSON body?",
+        options: [
+          { value: "kv", label: "Interactive Key-Value builder (Easy/Convenient)" },
+          { value: "raw", label: "Paste raw JSON string" },
+        ],
       });
 
-      if (clack.isCancel(bodyInput)) {
+      if (clack.isCancel(bodyInputType)) {
         clack.outro("Execution stopped.");
         return;
       }
 
-      const val = (bodyInput as string).trim();
-      if (val) {
-        requestBody = val;
+      if (bodyInputType === "kv") {
+        const bodyObj: Record<string, any> = {};
+        let addingFields = true;
+
+        while (addingFields) {
+          const fieldKey = await clack.text({
+            message: "Enter field key:",
+            placeholder: "e.g. email",
+          });
+
+          if (clack.isCancel(fieldKey) || !fieldKey || !fieldKey.trim()) break;
+
+          const fieldVal = await clack.text({
+            message: `Enter value for '${fieldKey.trim()}':`,
+            placeholder: "e.g. raj@example.com",
+          });
+
+          if (clack.isCancel(fieldVal)) break;
+
+          const trimmedVal = (fieldVal as string).trim();
+          let parsedVal: any = trimmedVal;
+
+          // Smart casting
+          if (trimmedVal.toLowerCase() === "true") parsedVal = true;
+          else if (trimmedVal.toLowerCase() === "false") parsedVal = false;
+          else if (trimmedVal.toLowerCase() === "null") parsedVal = null;
+          else if (!isNaN(Number(trimmedVal)) && trimmedVal !== "") parsedVal = Number(trimmedVal);
+
+          bodyObj[fieldKey.trim()] = parsedVal;
+
+          const addMore = await clack.confirm({
+            message: "Add another field to the request body?",
+            initialValue: false,
+          });
+
+          if (clack.isCancel(addMore) || !addMore) {
+            addingFields = false;
+          }
+        }
+        requestBody = JSON.stringify(bodyObj);
+      } else {
+        // Raw JSON input
+        const bodyInput = await clack.text({
+          message: "Enter JSON payload:",
+          placeholder: '{"name": "Alice", "email": "alice@gmail.com"}',
+          validate: (v) => {
+            if (!v || !v.trim()) return undefined;
+            try {
+              JSON.parse(v);
+              return undefined;
+            } catch {
+              return "Invalid JSON syntax. Please enter valid JSON.";
+            }
+          },
+        });
+
+        if (clack.isCancel(bodyInput)) {
+          clack.outro("Execution stopped.");
+          return;
+        }
+
+        const val = (bodyInput as string).trim();
+        if (val) {
+          requestBody = val;
+        }
       }
     }
   }
 
-  // 4. Prompt for Authorization Header (Bearer token)
+  // 4. Custom Headers Editor
+  const customHeaders: Record<string, string> = {};
+  const addHeaders = await clack.confirm({
+    message: "Do you want to add custom request headers?",
+    initialValue: false,
+  });
+
+  if (clack.isCancel(addHeaders)) {
+    clack.outro("Execution stopped.");
+    return;
+  }
+
+  if (addHeaders) {
+    let addingHeaders = true;
+    while (addingHeaders) {
+      const headerKey = await clack.text({
+        message: "Enter Header Name:",
+        placeholder: "e.g. X-Custom-Key",
+      });
+
+      if (clack.isCancel(headerKey) || !headerKey || !headerKey.trim()) break;
+
+      const headerVal = await clack.text({
+        message: `Enter value for '${headerKey.trim()}':`,
+        placeholder: "e.g. test-value",
+      });
+
+      if (clack.isCancel(headerVal)) break;
+
+      customHeaders[headerKey.trim()] = (headerVal as string).trim();
+
+      const addMoreHeaders = await clack.confirm({
+        message: "Add another custom header?",
+        initialValue: false,
+      });
+
+      if (clack.isCancel(addMoreHeaders) || !addMoreHeaders) {
+        addingHeaders = false;
+      }
+    }
+  }
+
+  // 5. Prompt for Authorization Header (Bearer token)
   const addAuth = await clack.confirm({
     message: "Do you want to add an Authorization Bearer token?",
     initialValue: false,
@@ -350,6 +492,10 @@ export async function runApiCommand(projectPath: string = ".") {
   // Confirm and Execute Request
   const finalUrl = `${baseUrl}${resolvedPath}${queryStr}`;
   clack.log.info(`Ready to request: ${chalk.bold.green(finalMethod)} ${chalk.cyan(finalUrl)}`);
+  
+  if (Object.keys(customHeaders).length > 0) {
+    clack.log.info(`Headers:\n${chalk.gray(JSON.stringify(customHeaders, null, 2))}`);
+  }
   if (bearerToken) {
     const preview = bearerToken.length > 12 ? `${bearerToken.slice(0, 8)}...` : bearerToken;
     clack.log.info(`Auth: Bearer ${preview} (masked)`);
@@ -374,6 +520,7 @@ export async function runApiCommand(projectPath: string = ".") {
     const headers: Record<string, string> = {
       Accept: "application/json, text/plain, */*",
       ...(requestBody ? { "Content-Type": "application/json" } : {}),
+      ...customHeaders,
     };
 
     if (bearerToken) {
