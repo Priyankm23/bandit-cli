@@ -138,10 +138,105 @@ function detectLocalPort(projectPath: string): number {
   return 3000;
 }
 
-export async function runApiCommand(projectPath: string = ".") {
+export async function runApiCommand(
+  methodOrPath: string = ".",
+  routePath?: string,
+  opts: any = {}
+) {
+  const httpMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"];
+  const isDirectMode = routePath !== undefined && httpMethods.includes(methodOrPath.toUpperCase());
+
+  if (isDirectMode) {
+    const finalMethod = methodOrPath.toUpperCase();
+    const finalPath = routePath!;
+
+    // Resolve base URL
+    const absoluteProjectPath = path.resolve(".");
+    const port = detectLocalPort(absoluteProjectPath);
+    let baseUrl = opts.url || `http://localhost:${port}`;
+    baseUrl = baseUrl.replace(/\/$/, "");
+
+    // Resolve Headers
+    const headers: Record<string, string> = {
+      Accept: "application/json, text/plain, */*",
+    };
+
+    if (opts.token) {
+      headers["Authorization"] = `Bearer ${opts.token}`;
+    }
+
+    if (opts.body) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    // Parse custom headers -H "Key: Val"
+    if (opts.header) {
+      const hList = Array.isArray(opts.header) ? opts.header : [opts.header];
+      for (const h of hList) {
+        const colonIdx = h.indexOf(":");
+        if (colonIdx !== -1) {
+          const key = h.slice(0, colonIdx).trim();
+          const val = h.slice(colonIdx + 1).trim();
+          headers[key] = val;
+        }
+      }
+    }
+
+    const finalUrl = `${baseUrl}${finalPath}`;
+    clack.intro(chalk.bold.bgBlue.white(" Bandit Direct API Request "));
+    clack.log.info(`Sending ${chalk.bold.green(finalMethod)} request to ${chalk.cyan(finalUrl)}...`);
+
+    const s = clack.spinner();
+    s.start("Executing request...");
+    try {
+      const start = performance.now();
+      const res = await fetch(finalUrl, {
+        method: finalMethod,
+        headers,
+        ...(opts.body ? { body: opts.body } : {}),
+      });
+      const end = performance.now();
+      const duration = end - start;
+
+      s.stop(`Request completed in ${duration.toFixed(1)}ms.`);
+
+      const contentType = res.headers.get("content-type") || "";
+      const resText = await res.text();
+
+      console.log("\n" + chalk.bold.cyan("📬 RESPONSE"));
+      console.log(chalk.gray("──────────────────────────────────────────────────"));
+      console.log(`Status:  ${res.status >= 200 && res.status < 300 ? chalk.bold.green(res.status) : chalk.bold.red(res.status)} ${res.statusText}`);
+      console.log(`Time:    ${duration.toFixed(1)} ms`);
+      console.log(chalk.gray("──────────────────────────────────────────────────"));
+      console.log(chalk.bold.cyan("Headers:"));
+      res.headers.forEach((val, key) => {
+        console.log(`  ${chalk.gray(key)}: ${val}`);
+      });
+      console.log(chalk.gray("──────────────────────────────────────────────────"));
+      console.log(chalk.bold.cyan("Body:"));
+
+      if (contentType.includes("application/json")) {
+        try {
+          const parsed = JSON.parse(resText);
+          console.log(chalk.green(JSON.stringify(parsed, null, 2)));
+        } catch {
+          console.log(resText);
+        }
+      } else {
+        console.log(resText || chalk.italic.gray("<empty body>"));
+      }
+      console.log(chalk.gray("──────────────────────────────────────────────────"));
+    } catch (err: any) {
+      s.stop("Request failed.");
+      clack.log.error(`Fetch execution error: ${err.message}`);
+    }
+    clack.outro(chalk.bold.green("Direct API call complete."));
+    return;
+  }
+
   clack.intro(chalk.bold.bgBlue.white(" Bandit Interactive API Client "));
 
-  const absoluteProjectPath = path.resolve(projectPath);
+  const absoluteProjectPath = path.resolve(methodOrPath);
   const s = clack.spinner();
   s.start("Scanning codebase for API endpoints...");
   const discoveredRoutes = await scanForRoutes(absoluteProjectPath);

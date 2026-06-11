@@ -37,10 +37,15 @@ npx bandit-cli <command>
 
 ### 1. Interactive API Playfield
 
-Find and test routes in your codebase:
-
+Find and test routes in your codebase interactively:
 ```bash
 bandit api
+```
+
+Or execute a direct API request immediately (acts like a local curl/HTTPie):
+```bash
+bandit api GET /api/v1/products --url http://localhost:8080 --token "jwt-token"
+bandit api POST /api/v1/users --body '{"name":"Raj"}'
 ```
 
 ### 2. Endpoint Benchmarking

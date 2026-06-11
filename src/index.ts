@@ -69,11 +69,16 @@ program
 // Subcommand: api
 program
   .command("api")
-  .description("Interactive API playfield: scan codebase routes and send test requests")
-  .argument("[path]", "Path to the project", ".")
-  .action(async (projectPath: string) => {
+  .description("API playfield: scan codebase routes (interactive) or send direct requests")
+  .argument("[method_or_path]", "HTTP Method or project path", ".")
+  .argument("[route_path]", "Route path (only when method is provided)")
+  .option("-u, --url <url>", "Server base URL")
+  .option("-b, --body <body>", "JSON request body")
+  .option("-t, --token <token>", "Bearer Auth token")
+  .option("-H, --header <headers...>", "Custom headers in Key:Value format")
+  .action(async (methodOrPath: string, routePath: string | undefined, opts: any) => {
     const { runApiCommand } = await import("./cli/api.js");
-    await runApiCommand(projectPath);
+    await runApiCommand(methodOrPath, routePath, opts);
   });
 
 // Subcommand: bench
