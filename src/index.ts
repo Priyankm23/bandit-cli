@@ -18,7 +18,9 @@ program
   .option("--json", "Print results as JSON")
   .option("--fail-on-warn", "Exit with code 1 if warnings exist")
   .action(async (projectPath: string, opts: any) => {
-    const results = await runAudit(projectPath);
+    const { resolveProjectPath } = await import("./utils/monorepo.js");
+    const resolvedPath = await resolveProjectPath(projectPath || ".");
+    const results = await runAudit(resolvedPath);
 
     if (opts.json) {
       process.stdout.write(JSON.stringify(results, null, 2) + "\n");
@@ -52,8 +54,10 @@ program
   .description("Audit local .env configurations against .env.example")
   .argument("[path]", "Path to the project", ".")
   .action(async (projectPath: string) => {
+    const { resolveProjectPath } = await import("./utils/monorepo.js");
+    const resolvedPath = await resolveProjectPath(projectPath || ".");
     const { runEnvCommand } = await import("./cli/env.js");
-    await runEnvCommand(projectPath);
+    await runEnvCommand(resolvedPath);
   });
 
 // Subcommand: doctor
@@ -77,8 +81,17 @@ program
   .option("-t, --token <token>", "Bearer Auth token")
   .option("-H, --header <headers...>", "Custom headers in Key:Value format")
   .action(async (methodOrPath: string, routePath: string | undefined, opts: any) => {
+    const httpMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"];
+    const isDirectMode = routePath !== undefined && httpMethods.includes(methodOrPath.toUpperCase());
+
+    let targetPath = methodOrPath;
+    if (!isDirectMode) {
+      const { resolveProjectPath } = await import("./utils/monorepo.js");
+      targetPath = await resolveProjectPath(methodOrPath || ".");
+    }
+
     const { runApiCommand } = await import("./cli/api.js");
-    await runApiCommand(methodOrPath, routePath, opts);
+    await runApiCommand(targetPath, routePath, opts);
   });
 
 // Subcommand: bench

@@ -10,44 +10,320 @@ interface DiscoveredRoute {
   sourceFile: string;
 }
 
+function normalizePath(filePath: string): string {
+  let normalized = filePath.replace(/\\/g, "/");
+  const winDriveRegex = /^([A-Z]):\//;
+  const match = normalized.match(winDriveRegex);
+  if (match) {
+    normalized = normalized.replace(winDriveRegex, `${match[1].toLowerCase()}:/`);
+  }
+  return normalized;
+}
+
+function resolveImport(sourceFile: string, importPath: string, projectPath: string): string | null {
+  let absolutePath = "";
+  if (importPath.startsWith("@/") || importPath.startsWith("~/")) {
+    const relativePart = importPath.slice(2);
+    absolutePath = path.resolve(projectPath, "src", relativePart);
+  } else if (importPath.startsWith("src/")) {
+    absolutePath = path.resolve(projectPath, importPath);
+  } else if (importPath.startsWith(".")) {
+    const sourceDir = path.dirname(sourceFile);
+    absolutePath = path.resolve(sourceDir, importPath);
+  } else {
+    return null;
+  }
+
+  const extensions = [".ts", ".js", ".tsx", ".jsx"];
+  for (const ext of extensions) {
+    const fileWithExt = absolutePath + ext;
+    if (fs.existsSync(fileWithExt)) {
+      return normalizePath(fileWithExt);
+    }
+  }
+
+  if (fs.existsSync(absolutePath) && fs.statSync(absolutePath).isDirectory()) {
+    for (const ext of extensions) {
+      const indexFile = path.join(absolutePath, "index" + ext);
+      if (fs.existsSync(indexFile)) {
+        return normalizePath(indexFile);
+      }
+      const routerFile = path.join(absolutePath, "router" + ext);
+      if (fs.existsSync(routerFile)) {
+        return normalizePath(routerFile);
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseImportNames(importClause: string): { localName: string }[] {
+  const names: { localName: string }[] = [];
+  importClause = importClause.trim();
+
+  const nsMatch = importClause.match(/\*\s+as\s+([a-zA-Z0-9_$]+)/);
+  if (nsMatch) {
+    names.push({ localName: nsMatch[1] });
+    return names;
+  }
+
+  const destructureMatch = importClause.match(/\{([\s\S]*?)\}/);
+  if (destructureMatch) {
+    const content = destructureMatch[1];
+    const parts = content.split(",");
+    for (const part of parts) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const aliasMatch = trimmed.match(/([a-zA-Z0-9_$]+)\s+as\s+([a-zA-Z0-9_$]+)/);
+      if (aliasMatch) {
+        names.push({ localName: aliasMatch[2] });
+      } else {
+        const nameMatch = trimmed.match(/^([a-zA-Z0-9_$]+)$/);
+        if (nameMatch) {
+          names.push({ localName: nameMatch[1] });
+        }
+      }
+    }
+    const beforeDestruct = importClause.split("{")[0].trim().replace(/,$/, "").trim();
+    if (beforeDestruct && !beforeDestruct.startsWith("import")) {
+      names.push({ localName: beforeDestruct });
+    }
+    return names;
+  }
+
+  if (importClause && !importClause.includes("{") && !importClause.includes("*")) {
+    names.push({ localName: importClause });
+  }
+  return names;
+}
+
+function resolvePaths(pref: string, p: string): string {
+  let combined = `${pref}/${p}`.replace(/\/+/g, "/");
+  if (!combined.startsWith("/")) combined = "/" + combined;
+  if (combined.length > 1 && combined.endsWith("/")) {
+    combined = combined.slice(0, -1);
+  }
+  return combined;
+}
+
+interface GraphNode {
+  id: string; // "file:F" or "var:F:V"
+  type: "file" | "var";
+  filePath: string;
+  varName?: string;
+  prefixes: Set<string>;
+}
+
+interface GraphEdge {
+  from: string;
+  to: string;
+  path: string;
+}
+
 // Scans files for common route definitions and mounts
-async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
+export async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
+  projectPath = normalizePath(projectPath);
   const routes: DiscoveredRoute[] = [];
-  const files = await fg(["src/**/*.{ts,js}", "*.{ts,js}", "routes/**/*.{ts,js}", "controllers/**/*.{ts,js}"], {
+  const files = (await fg(["src/**/*.{ts,js}", "*.{ts,js}", "routes/**/*.{ts,js}", "controllers/**/*.{ts,js}"], {
     cwd: projectPath,
     absolute: true,
     ignore: ["**/node_modules/**", "**/dist/**", "**/*.test.{ts,js}", "**/*.spec.{ts,js}"],
-  });
+  })).map(normalizePath);
 
-  const prefixMap = new Map<string, string>();
 
-  // Regex to detect router mounts, e.g. app.use('/api/v1/auth', authRouter) or router.use('/auth', authRouter)
-  // Group 3 matches the path prefix, Group 4 matches the router variable name
-  const mountPattern = /\b([a-zA-Z0-9_]+)\.(use|route|group)\s*\(\s*['"`]([^'"`]+)['"`]\s*,\s*([a-zA-Z0-9_]+)/gi;
+  const importsByFile = new Map<string, Map<string, string>>();
 
-  // Read files first to construct prefixMap
+  // Step 1: Scan imports & requires for all files
+  for (const file of files) {
+    const localToTarget = new Map<string, string>();
+    try {
+      const content = fs.readFileSync(file, "utf-8");
+      
+      const esImportRegex = /import\s+([\s\S]*?)\s+from\s+['"`]([^'"`]+)['"`]/g;
+      let match;
+      while ((match = esImportRegex.exec(content)) !== null) {
+        const importClause = match[1];
+        const importPath = match[2];
+        const targetFile = resolveImport(file, importPath, projectPath);
+        if (targetFile) {
+          const names = parseImportNames(importClause);
+          for (const name of names) {
+            localToTarget.set(name.localName, targetFile);
+          }
+        }
+      }
+
+      const requireRegex = /(?:const|let|var)\s+([\s\S]*?)\s*=\s*require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
+      while ((match = requireRegex.exec(content)) !== null) {
+        const varClause = match[1];
+        const importPath = match[2];
+        const targetFile = resolveImport(file, importPath, projectPath);
+        if (targetFile) {
+          const names = parseImportNames(varClause);
+          for (const name of names) {
+            localToTarget.set(name.localName, targetFile);
+          }
+        }
+      }
+    } catch {}
+    importsByFile.set(file, localToTarget);
+  }
+
+  // Step 2: Build Dependency Graph Nodes and Edges
+  const nodes = new Map<string, GraphNode>();
+  const edges: GraphEdge[] = [];
+
+  const ensureNode = (id: string, type: "file" | "var", filePath: string, varName?: string) => {
+    if (!nodes.has(id)) {
+      nodes.set(id, { id, type, filePath, varName, prefixes: new Set<string>() });
+    }
+  };
+
+  // Create file nodes
+  for (const file of files) {
+    ensureNode(`file:${file}`, "file", file);
+  }
+
+  // Pre-populate route variable nodes from route declarations
+  const routeVarPattern = /\b([a-zA-Z0-9_]+)\.(get|post|put|delete|patch|options|head)\s*\(/gi;
+  for (const file of files) {
+    try {
+      const content = fs.readFileSync(file, "utf-8");
+      let match;
+      routeVarPattern.lastIndex = 0;
+      while ((match = routeVarPattern.exec(content)) !== null) {
+        const instanceName = match[1];
+        ensureNode(`var:${file}:${instanceName}`, "var", file, instanceName);
+      }
+    } catch {}
+  }
+
+  const mountPattern = /\b([a-zA-Z0-9_]+)\.(use|route|group)\s*\(\s*(?:['"`]([^'"`]+)['"`]\s*,\s*)?(?:require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)|([a-zA-Z0-9_]+))/gi;
+
   for (const file of files) {
     try {
       const content = fs.readFileSync(file, "utf-8");
       let match;
       mountPattern.lastIndex = 0;
       while ((match = mountPattern.exec(content)) !== null) {
-        const prefix = match[3];
-        const routerName = match[4];
-        if (prefix && routerName && routerName !== "express" && routerName !== "cors" && routerName !== "helmet") {
-          prefixMap.set(routerName, prefix);
+        const parentVar = match[1];
+        const mountPath = match[3] || "/";
+        const inlineRequire = match[4];
+        const childVar = match[5];
+
+        const parentId = `var:${file}:${parentVar}`;
+        ensureNode(parentId, "var", file, parentVar);
+
+        if (inlineRequire) {
+          const targetFile = resolveImport(file, inlineRequire, projectPath);
+          if (targetFile) {
+            const targetFileId = `file:${targetFile}`;
+            ensureNode(targetFileId, "file", targetFile);
+            edges.push({ from: parentId, to: targetFileId, path: mountPath });
+          }
+        } else if (childVar) {
+          const childId = `var:${file}:${childVar}`;
+          ensureNode(childId, "var", file, childVar);
+          edges.push({ from: parentId, to: childId, path: mountPath });
+
+          // Check if childVar is imported
+          const targetFile = importsByFile.get(file)?.get(childVar);
+          if (targetFile) {
+            const targetFileId = `file:${targetFile}`;
+            ensureNode(targetFileId, "file", targetFile);
+            edges.push({ from: childId, to: targetFileId, path: "/" });
+          }
         }
       }
     } catch {}
   }
 
-  // Regex patterns
-  // 1. Generic Router paths: authRouter.post('/login', ...)
-  // Group 1 matches the router variable, Group 2 matches method, Group 3 matches endpoint path
+  // Step 3: Link file nodes to their root variables within that file
+  for (const file of files) {
+    const fileId = `file:${file}`;
+    // Find all variable nodes in this file
+    const varNodesInFile = Array.from(nodes.values()).filter(
+      (n) => n.type === "var" && n.filePath === file
+    );
+
+    for (const vNode of varNodesInFile) {
+      // Is there an incoming edge to this variable from another variable/file in the same file?
+      const hasIncomingLocal = edges.some(
+        (e) => e.to === vNode.id && e.from.startsWith(`var:${file}:`)
+      );
+
+      if (!hasIncomingLocal) {
+        // It is a root variable in this file, link the file node to it
+        edges.push({ from: fileId, to: vNode.id, path: "/" });
+      }
+    }
+  }
+
+  // Step 4: Identify entry points and initialize their prefixes
+  // Entry points are file nodes that have no incoming edges from OTHER files
+  const fileIncomingFromOthers = new Set<string>();
+  for (const edge of edges) {
+    if (edge.to.startsWith("file:")) {
+      const fromFile = nodes.get(edge.from)?.filePath;
+      const toFile = nodes.get(edge.to)?.filePath;
+      if (fromFile && toFile && fromFile !== toFile) {
+        fileIncomingFromOthers.add(edge.to);
+      }
+    }
+  }
+
+  for (const file of files) {
+    const fileId = `file:${file}`;
+    if (!fileIncomingFromOthers.has(fileId)) {
+      const fNode = nodes.get(fileId);
+      if (fNode) {
+        fNode.prefixes.add("/");
+      }
+    }
+  }
+
+  // Step 5: Propagate prefixes using BFS
+  const queue: string[] = [];
+  for (const node of nodes.values()) {
+    if (node.prefixes.size > 0) {
+      queue.push(node.id);
+    }
+  }
+
+  const inQueue = new Set<string>(queue);
+
+  while (queue.length > 0) {
+    const currId = queue.shift()!;
+    inQueue.delete(currId);
+    const currNode = nodes.get(currId);
+    if (!currNode) continue;
+
+    // Find outgoing edges
+    const outgoing = edges.filter((e) => e.from === currId);
+    for (const edge of outgoing) {
+      const targetNode = nodes.get(edge.to);
+      if (!targetNode) continue;
+
+      let changed = false;
+      for (const pref of currNode.prefixes) {
+        const combined = resolvePaths(pref, edge.path);
+        if (!targetNode.prefixes.has(combined)) {
+          targetNode.prefixes.add(combined);
+          changed = true;
+        }
+      }
+
+      if (changed && !inQueue.has(edge.to)) {
+        queue.push(edge.to);
+        inQueue.add(edge.to);
+      }
+    }
+  }
+
+  // Step 6: Scan files for actual routes and use propagated prefixes
   const expressPattern = /\b([a-zA-Z0-9_]+)\.(get|post|put|delete|patch|options|head)\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
-  // 2. NestJS decorators: @Get('/path')
   const nestPattern = /@(Get|Post|Put|Delete|Patch)\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
-  // 3. NestJS controllers: @Controller('/prefix')
   const controllerPattern = /@Controller\s*\(\s*['"`]([^'"`\s]+)['"`]/gi;
 
   for (const file of files) {
@@ -71,22 +347,21 @@ async function scanForRoutes(projectPath: string): Promise<DiscoveredRoute[]> {
         const method = match[2].toUpperCase();
         const subPath = match[3];
 
-        let rPath = subPath;
-        // If the instanceName has a registered mount prefix, prepend it!
-        if (prefixMap.has(instanceName)) {
-          const prefix = prefixMap.get(instanceName)!.replace(/\/$/, "");
-          rPath = `${prefix}/${subPath.replace(/^\//, "")}`;
+        const varNodeId = `var:${file}:${instanceName}`;
+        const varNode = nodes.get(varNodeId);
+
+        const targetPrefixes = (varNode && varNode.prefixes.size > 0)
+          ? Array.from(varNode.prefixes)
+          : ["/"];
+
+        for (const prefix of targetPrefixes) {
+          const rPath = resolvePaths(prefix, subPath);
+          routes.push({
+            method,
+            routePath: rPath,
+            sourceFile: relativePath,
+          });
         }
-
-        // Clean up double slashes
-        rPath = rPath.replace(/\/+/g, "/");
-        if (!rPath.startsWith("/")) rPath = `/${rPath}`;
-
-        routes.push({
-          method,
-          routePath: rPath,
-          sourceFile: relativePath,
-        });
       }
 
       // 2. NestJS

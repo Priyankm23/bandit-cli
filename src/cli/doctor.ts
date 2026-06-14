@@ -24,6 +24,28 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
+function findSensitiveKeys(obj: any): string[] {
+  const sensitiveKeywords = [
+    "password", "hashed_password", "salt", "secret", "ssn", 
+    "credit_card", "creditcard", "passwd", "token", "auth_token"
+  ];
+  const found: string[] = [];
+
+  function search(current: any) {
+    if (!current || typeof current !== "object") return;
+    for (const key of Object.keys(current)) {
+      const lowerKey = key.toLowerCase();
+      if (sensitiveKeywords.includes(lowerKey)) {
+        found.push(key);
+      }
+      search(current[key]);
+    }
+  }
+
+  search(obj);
+  return found;
+}
+
 export async function runDoctorCommand(targetUrl: string = "http://localhost:3000") {
   clack.intro(chalk.bold.bgBlue.white(" Bandit Live Server Doctor "));
   clack.log.info(`Target URL: ${chalk.bold.cyan(targetUrl)}`);
@@ -217,6 +239,158 @@ export async function runDoctorCommand(targetUrl: string = "http://localhost:300
     }
   }
   s.stop("Oversized payload probe complete.");
+
+  // 4. Sensitive Data Leak Scanner
+  s.start("Scanning response for sensitive data leakage...");
+  try {
+    const rootText = await rootResponse.text();
+    let rootJson: any = null;
+    try {
+      rootJson = JSON.parse(rootText);
+    } catch {}
+
+    if (rootJson) {
+      const leaked = findSensitiveKeys(rootJson);
+      if (leaked.length > 0) {
+        reports.push({
+          title: "Sensitive Data Leak Check",
+          status: "fail",
+          details: `Root JSON response exposed sensitive field(s): [${leaked.join(", ")}]`,
+          suggestion: "Remove database columns like password/salt/secret from response serializers/DTOs.",
+        });
+      } else {
+        reports.push({
+          title: "Sensitive Data Leak Check",
+          status: "pass",
+          details: "No sensitive fields leaked in root JSON response.",
+        });
+      }
+    } else {
+      reports.push({
+        title: "Sensitive Data Leak Check",
+        status: "pass",
+        details: "Root response did not return JSON (no leaks scanned).",
+      });
+    }
+  } catch (err: any) {
+    reports.push({
+      title: "Sensitive Data Leak Check",
+      status: "warn",
+      details: `Failed to audit sensitive data leaks: ${err.message}`,
+    });
+  }
+  s.stop("Sensitive data scan complete.");
+
+  // 5. Active Security Penetration Probes (SQLi, NoSQLi, XSS)
+  s.start("Executing active security penetration probes...");
+
+  // SQLi Probe
+  try {
+    const sqliUrl = `${targetUrl.replace(/\/$/, "")}/?id=%27%20OR%20%271%27%3D%271`;
+    const sqliRes = await fetchWithTimeout(sqliUrl, {}, 3000);
+    const sqliText = await sqliRes.text();
+
+    const sqlErrors = [
+      "SQLITE_ERROR",
+      "syntax error near",
+      "PostgreSQL query failed",
+      "mysql server version",
+      "MariaDB server version",
+      "You have an error in your SQL syntax",
+      "pg_query",
+    ];
+
+    const leakedSqlError = sqlErrors.find(err => sqliText.toLowerCase().includes(err.toLowerCase()));
+
+    if (leakedSqlError) {
+      reports.push({
+        title: "SQL Injection (SQLi) Vulnerability Probe",
+        status: "fail",
+        details: `Server exposed SQL error token [${leakedSqlError}] when queried with SQL injection payload.`,
+        suggestion: "Use parameterized queries or ORMs (Prisma/Drizzle) and never concatenate raw inputs into SQL.",
+      });
+    } else {
+      reports.push({
+        title: "SQL Injection (SQLi) Vulnerability Probe",
+        status: "pass",
+        details: "No raw SQL exceptions leaked in response to injection payload.",
+      });
+    }
+  } catch (err: any) {
+    reports.push({
+      title: "SQL Injection (SQLi) Vulnerability Probe",
+      status: "warn",
+      details: `Failed to execute SQLi probe: ${err.message}`,
+    });
+  }
+
+  // XSS Probe
+  try {
+    const xssPayload = "<script>alert(1)</script>";
+    const xssUrl = `${targetUrl.replace(/\/$/, "")}/?search=${encodeURIComponent(xssPayload)}`;
+    const xssRes = await fetchWithTimeout(xssUrl, {}, 3000);
+    const xssText = await xssRes.text();
+
+    if (xssRes.ok && xssText.includes(xssPayload)) {
+      reports.push({
+        title: "Cross-Site Scripting (XSS) Vulnerability Probe",
+        status: "fail",
+        details: "Server reflected unescaped HTML script tags in the response body.",
+        suggestion: "Sanitize user inputs and HTML-encode reflected outputs to prevent script execution.",
+      });
+    } else {
+      reports.push({
+        title: "Cross-Site Scripting (XSS) Vulnerability Probe",
+        status: "pass",
+        details: "Input reflected HTML script tags are properly escaped or omitted by the server.",
+      });
+    }
+  } catch (err: any) {
+    reports.push({
+      title: "Cross-Site Scripting (XSS) Vulnerability Probe",
+      status: "warn",
+      details: `Failed to execute XSS probe: ${err.message}`,
+    });
+  }
+
+  // NoSQLi Probe
+  try {
+    const nosqliUrl = `${targetUrl.replace(/\/$/, "")}/?username[%24ne]=admin`;
+    const nosqliRes = await fetchWithTimeout(nosqliUrl, {}, 3000);
+    const nosqliText = await nosqliRes.text();
+
+    const nosqlErrors = [
+      "MongoError",
+      "MongoServerError",
+      "CastError",
+      "ObjectParameterError",
+      "MongooseError",
+    ];
+
+    const leakedNoSqlError = nosqlErrors.find(err => nosqliText.toLowerCase().includes(err.toLowerCase()));
+
+    if (leakedNoSqlError) {
+      reports.push({
+        title: "NoSQL Injection Vulnerability Probe",
+        status: "fail",
+        details: `Server exposed NoSQL error token [${leakedNoSqlError}] in response to query parameters.`,
+        suggestion: "Sanitize input parameters and sanitize mongo operator prefixes ($) using tools like 'mongo-sanitize'.",
+      });
+    } else {
+      reports.push({
+        title: "NoSQL Injection Vulnerability Probe",
+        status: "pass",
+        details: "No NoSQL database exceptions leaked in response to query payload.",
+      });
+    }
+  } catch (err: any) {
+    reports.push({
+      title: "NoSQL Injection Vulnerability Probe",
+      status: "warn",
+      details: `Failed to execute NoSQLi probe: ${err.message}`,
+    });
+  }
+  s.stop("Active penetration probes complete.");
 
   // Print results
   console.log("\n" + chalk.bold("Diagnostic Results:"));

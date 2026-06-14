@@ -14,6 +14,7 @@
 - **Live Server Doctor**: Probes your running server for security headers, CORS wildcards, stack trace/error leakage, and payload crash handling.
 - **Environment Variable Auditor**: Compares active `.env` files against `.env.example` to flag missing keys, empty values, and placeholder defaults before you boot.
 - **Static Project Auditor**: Evaluates package setup, file organization, safety configs, and dependency scopes.
+- **Monorepo & Microservices Auto-Discovery**: Automatically scans your workspace for nested packages containing `package.json` and interactively prompts you to target specific services.
 
 ---
 
@@ -38,11 +39,13 @@ npx bandit-cli <command>
 ### 1. Interactive API Playfield
 
 Find and test routes in your codebase interactively:
+
 ```bash
 bandit api
 ```
 
 Or execute a direct API request immediately (acts like a local curl/HTTPie):
+
 ```bash
 bandit api GET /api/v1/products --url http://localhost:8080 --token "jwt-token"
 bandit api POST /api/v1/users --body '{"name":"Raj"}'

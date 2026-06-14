@@ -7,91 +7,57 @@ function icon(status: Status) {
   return chalk.gray("-");
 }
 
-function sevColor(sev: Severity, text: string) {
-  if (sev === "error") return chalk.red(text);
-  if (sev === "warn") return chalk.yellow(text);
-  return chalk.blue(text);
-}
-
-function sevLabel(sev: Severity) {
-  if (sev === "error") return "ERROR";
-  if (sev === "warn") return "WARN";
-  return "INFO";
-}
-
 function printSeparator() {
-  console.log(chalk.gray("─".repeat(80)));
+  console.log(chalk.gray("  " + "─".repeat(70)));
 }
 
 function printItem(item: AuditItem) {
   const statusIcon = icon(item.status);
-  const line = `${statusIcon} ${chalk.bold(item.title)}`;
+  let titleText = chalk.bold(item.title);
+  
+  if (item.status === "fail") {
+    if (item.severity === "error") titleText += chalk.red.bold(" (ERROR)");
+    else if (item.severity === "warn") titleText += chalk.yellow.bold(" (WARN)");
+    else titleText += chalk.blue.bold(" (INFO)");
+  }
 
-  console.log(line);
+  console.log(`  ${statusIcon}  ${titleText}`);
 
-  // Show details for pass/fail/skip
+  // Show details
   if (item.details) {
-    console.log(chalk.gray(`  ↳ ${item.details}`));
+    console.log(chalk.gray(`     ↳ ${item.details}`));
   }
 
   // Show suggestion only for failures
   if (item.status === "fail" && item.suggestion) {
-    console.log(chalk.gray(`  ↳ Suggestion: ${item.suggestion}`));
-  }
-}
-
-function printSection(title: string, items: AuditItem[], color: Function) {
-  if (items.length === 0) return;
-
-  console.log("");
-  console.log(color(chalk.bold(`● ${title}`)));
-  printSeparator();
-
-  for (const item of items) {
-    printItem(item);
+    console.log(chalk.cyan(`     ↳ Suggestion: ${item.suggestion}`));
   }
 }
 
 export function printHuman(report: AuditReport) {
-  // Header
+  // Header Box
   console.log("");
+  console.log(chalk.cyan(`  ┌${"─".repeat(70)}┐`));
+  console.log(chalk.cyan(`  │`) + chalk.bold.white("                    BACKEND PROJECT AUDIT SUMMARY                     ") + chalk.cyan(`│`));
+  console.log(chalk.cyan(`  └${"─".repeat(70)}┘`));
+  
+  console.log(`    ${chalk.gray("Project:")} ${chalk.bold(report.projectPath)}`);
   console.log(
-    chalk.bold.blue(
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    ),
+    `    ${chalk.gray("Results:")} ${chalk.green(`${report.summary.pass} Passed`)}, ` +
+    `${chalk.red(`${report.summary.fail} Failed`)}, ` +
+    `${chalk.gray(`${report.summary.skip} Skipped`)}`
   );
-  console.log(
-    chalk.bold.white(`                           Backend Audit Report`),
-  );
-  console.log(
-    chalk.bold.blue(
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    ),
-  );
-  console.log(chalk.gray(`Project: ${report.projectPath}`));
-  console.log(
-    chalk.gray(
-      `Summary: ${chalk.green(`pass=${report.summary.pass}`)} ${chalk.red(`fail=${report.summary.fail}`)} ${chalk.gray(`skip=${report.summary.skip}`)}`,
-    ),
-  );
-
+  
   // Severity Legend
   console.log("");
-  console.log(chalk.bold("Severity Legend:"));
   console.log(
-    chalk.red("  ● ERROR  ") +
-      chalk.gray("- Critical issues that must be fixed"),
-  );
-  console.log(
-    chalk.yellow("  ● WARN   ") +
-      chalk.gray("- Important issues that should be addressed"),
-  );
-  console.log(
-    chalk.blue("  ● INFO   ") +
-      chalk.gray("- Informational items or best practices"),
+    `    ${chalk.bold.gray("Severity Legend:")}  ` +
+    `${chalk.red("● ERROR")} (Critical)   ` +
+    `${chalk.yellow("● WARN")} (Important)   ` +
+    `${chalk.blue("● INFO")} (Best Practice)`
   );
 
-  // Group items by status first
+  // Group items
   const passedItems = report.items.filter((item) => item.status === "pass");
   const failedItems = report.items.filter((item) => item.status === "fail");
   const skippedItems = report.items.filter((item) => item.status === "skip");
@@ -99,7 +65,7 @@ export function printHuman(report: AuditReport) {
   // Print PASSED section
   if (passedItems.length > 0) {
     console.log("");
-    console.log(chalk.bold.green(`✓ PASSED CHECKS (${passedItems.length})`));
+    console.log(chalk.bold.green(`  ✔ PASSED CHECKS (${passedItems.length})`));
     printSeparator();
     for (const item of passedItems) {
       printItem(item);
@@ -109,20 +75,17 @@ export function printHuman(report: AuditReport) {
   // Print FAILED sections grouped by severity
   if (failedItems.length > 0) {
     console.log("");
-    console.log(chalk.bold.red(`✖ FAILED CHECKS (${failedItems.length})`));
+    console.log(chalk.bold.red(`  ✖ FAILED CHECKS (${failedItems.length})`));
     printSeparator();
 
-    // Group failed items by severity
-    const failedErrors = failedItems.filter(
-      (item) => item.severity === "error",
-    );
+    const failedErrors = failedItems.filter((item) => item.severity === "error");
     const failedWarns = failedItems.filter((item) => item.severity === "warn");
     const failedInfos = failedItems.filter((item) => item.severity === "info");
 
     // Print failed ERRORS
     if (failedErrors.length > 0) {
       console.log("");
-      console.log(chalk.red(chalk.bold(`  ● ERRORS (${failedErrors.length})`)));
+      console.log(chalk.red(chalk.bold(`    ● ERRORS (${failedErrors.length})`)));
       for (const item of failedErrors) {
         console.log("");
         printItem(item);
@@ -132,9 +95,7 @@ export function printHuman(report: AuditReport) {
     // Print failed WARNINGS
     if (failedWarns.length > 0) {
       console.log("");
-      console.log(
-        chalk.yellow(chalk.bold(`  ● WARNINGS (${failedWarns.length})`)),
-      );
+      console.log(chalk.yellow(chalk.bold(`    ● WARNINGS (${failedWarns.length})`)));
       for (const item of failedWarns) {
         console.log("");
         printItem(item);
@@ -144,7 +105,7 @@ export function printHuman(report: AuditReport) {
     // Print failed INFO
     if (failedInfos.length > 0) {
       console.log("");
-      console.log(chalk.blue(chalk.bold(`  ● INFO (${failedInfos.length})`)));
+      console.log(chalk.blue(chalk.bold(`    ● INFO (${failedInfos.length})`)));
       for (const item of failedInfos) {
         console.log("");
         printItem(item);
@@ -155,37 +116,24 @@ export function printHuman(report: AuditReport) {
   // Print SKIPPED section (if any)
   if (skippedItems.length > 0) {
     console.log("");
-    console.log(chalk.bold.gray(`- SKIPPED CHECKS (${skippedItems.length})`));
+    console.log(chalk.bold.gray(`  - SKIPPED CHECKS (${skippedItems.length})`));
     printSeparator();
     for (const item of skippedItems) {
       printItem(item);
     }
   }
 
-  // Footer
-  console.log("");
-  console.log(
-    chalk.bold.blue(
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    ),
-  );
-
-  // Summary message
+  // Footer Box
   const failCount = report.summary.fail;
+  console.log("");
   if (failCount === 0) {
-    console.log(chalk.green.bold(`✓ All checks passed!`));
+    console.log(chalk.green(`  ┌${"─".repeat(70)}┐`));
+    console.log(chalk.green(`  │`) + chalk.bold.green("  ✔ All audits passed successfully!                                   ") + chalk.green(`│`));
+    console.log(chalk.green(`  └${"─".repeat(70)}┘`));
   } else {
-    console.log(
-      chalk.yellow(
-        `                         ⚠ ${failCount} check${failCount > 1 ? "s" : ""} need${failCount === 1 ? "s" : ""} attention.`,
-      ),
-    );
+    console.log(chalk.yellow(`  ┌${"─".repeat(70)}┐`));
+    console.log(chalk.yellow(`  │`) + chalk.bold.yellow("  ⚠ Audit completed with warnings/errors. Check issues above.         ") + chalk.yellow(`│`));
+    console.log(chalk.yellow(`  └${"─".repeat(70)}┘`));
   }
-
-  console.log(
-    chalk.bold.blue(
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    ),
-  );
   console.log("");
 }
