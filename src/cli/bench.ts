@@ -159,5 +159,18 @@ export async function runBenchCommand(targetUrl: string, opts: BenchOptions) {
     );
   }
   console.log(chalk.gray("──────────────────────────────────────────────────"));
+  
+  try {
+    const { StudioDB } = await import("../studio/db.js");
+    const db = new StudioDB();
+    db.saveBenchmark({
+      targetUrl,
+      connections: opts.connections,
+      requests: opts.requests,
+      rps,
+      latency: { min, avg, max, p50, p90, p95, p99 },
+    });
+  } catch {}
+
   clack.outro(chalk.bold.green("Benchmark complete!"));
 }

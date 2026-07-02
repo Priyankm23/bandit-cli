@@ -414,5 +414,11 @@ export async function runDoctorCommand(targetUrl: string = "http://localhost:300
     console.log("");
   }
 
+  try {
+    const { StudioDB } = await import("../studio/db.js");
+    const db = new StudioDB();
+    db.saveAudit(reports);
+  } catch {}
+
   clack.outro(chalk.bold.green("Doctor diagnostic scan completed."));
 }

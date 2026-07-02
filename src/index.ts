@@ -118,6 +118,18 @@ program
     await runBenchCommand(url, { connections, requests });
   });
 
+// Subcommand: studio
+program
+  .command("studio")
+  .description("Launch Bandit Studio local web dashboard")
+  .argument("[path]", "Path to the project", ".")
+  .action(async (projectPath: string) => {
+    const { resolveProjectPath } = await import("./utils/monorepo.js");
+    const resolvedPath = await resolveProjectPath(projectPath || ".");
+    const { runStudioCommand } = await import("./cli/studio.js");
+    await runStudioCommand(resolvedPath);
+  });
+
 // Default to help if no command specified
 if (!process.argv.slice(2).length) {
   program.outputHelp();

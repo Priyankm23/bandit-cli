@@ -4,7 +4,7 @@ import fg from "fast-glob";
 import * as clack from "@clack/prompts";
 import chalk from "chalk";
 
-interface DiscoveredRoute {
+export interface DiscoveredRoute {
   method: string;
   routePath: string;
   sourceFile: string;
@@ -626,7 +626,7 @@ export async function runApiCommand(
     // Let the developer confirm and edit the path (highly convenient for prefix additions!)
     const editPath = await clack.text({
       message: "Confirm or edit the route path:",
-      defaultValue: selectedRoute.routePath,
+      initialValue: selectedRoute.routePath,
       placeholder: selectedRoute.routePath,
       validate: (v) => (!v || !v.startsWith("/") ? "Route path must start with a slash '/'" : undefined),
     });

@@ -2,3 +2,5 @@ node_modules/
 docs/
 dist/
 tmpclaude-6eae-cwd
+.npmrc
+.bandit
