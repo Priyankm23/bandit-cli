@@ -35,8 +35,12 @@ export async function runEnvCommand(projectPath: string = ".") {
   const examplePath = path.join(absoluteProjectPath, ".env.example");
 
   if (!fs.existsSync(examplePath)) {
-    clack.log.warn(`No ${chalk.cyan(".env.example")} file found in the root of the project.`);
-    clack.log.info("Create a .env.example containing your environment variable keys as placeholders.");
+    clack.log.warn(
+      `No ${chalk.cyan(".env.example")} file found in the root of the project.`,
+    );
+    clack.log.info(
+      "Create a .env.example containing your environment variable keys as placeholders.",
+    );
     clack.outro(chalk.red("Failed to audit environment variables."));
     return;
   }
@@ -52,14 +56,20 @@ export async function runEnvCommand(projectPath: string = ".") {
   }
 
   const exampleKeys = Array.from(exampleKeysMap.keys());
-  clack.log.info(`Found ${chalk.bold.cyan(exampleKeys.length)} keys in .env.example`);
+  clack.log.info(
+    `Found ${chalk.bold.cyan(exampleKeys.length)} keys in .env.example`,
+  );
 
   // Scan for active .env files
   const files = fs.readdirSync(absoluteProjectPath);
-  const envFiles = files.filter((f) => f === ".env" || (f.startsWith(".env.") && !f.endsWith(".example")));
+  const envFiles = files.filter(
+    (f) => f === ".env" || (f.startsWith(".env.") && !f.endsWith(".example")),
+  );
 
   if (envFiles.length === 0) {
-    clack.log.warn("No active environment configuration files (like `.env`, `.env.local`, etc.) detected.");
+    clack.log.warn(
+      "No active environment configuration files (like `.env`, `.env.local`, etc.) detected.",
+    );
     clack.outro(chalk.yellow("Done."));
     return;
   }
@@ -82,7 +92,12 @@ export async function runEnvCommand(projectPath: string = ".") {
           missingKeys.push(expectedKey);
         } else {
           const val = currentKeysMap.get(expectedKey)!;
-          if (val === "" || val === "your_key_here" || val === "placeholder" || val.includes("TODO")) {
+          if (
+            val === "" ||
+            val === "your_key_here" ||
+            val === "placeholder" ||
+            val.includes("TODO")
+          ) {
             emptyKeys.push(expectedKey);
           }
         }
@@ -96,25 +111,31 @@ export async function runEnvCommand(projectPath: string = ".") {
       }
 
       // Output report for this file
-      if (missingKeys.length === 0 && emptyKeys.length === 0 && extraKeys.length === 0) {
-        clack.log.success(chalk.green(`  ✔ ${envFile} is perfectly in sync with .env.example!`));
+      if (
+        missingKeys.length === 0 &&
+        emptyKeys.length === 0 &&
+        extraKeys.length === 0
+      ) {
+        clack.log.success(
+          chalk.green(`  ✔ ${envFile} is perfectly in sync with .env.example!`),
+        );
       } else {
         if (missingKeys.length > 0) {
           clack.log.error(
             `  ❌ Missing keys (required by .env.example):\n` +
-              missingKeys.map((k) => `     - ${chalk.red(k)}`).join("\n")
+              missingKeys.map((k) => `     - ${chalk.red(k)}`).join("\n"),
           );
         }
         if (emptyKeys.length > 0) {
           clack.log.warn(
             `  ⚠ Placeholder/Empty values detected:\n` +
-              emptyKeys.map((k) => `     - ${chalk.yellow(k)}`).join("\n")
+              emptyKeys.map((k) => `     - ${chalk.yellow(k)}`).join("\n"),
           );
         }
         if (extraKeys.length > 0) {
           clack.log.info(
             `  ℹ Extra keys (not declared in .env.example):\n` +
-              extraKeys.map((k) => `     - ${chalk.cyan(k)}`).join("\n")
+              extraKeys.map((k) => `     - ${chalk.cyan(k)}`).join("\n"),
           );
         }
       }

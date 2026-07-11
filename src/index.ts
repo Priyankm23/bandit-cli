@@ -48,18 +48,6 @@ program
     await runPortsCommand();
   });
 
-// Subcommand: env
-program
-  .command("env")
-  .description("Audit local .env configurations against .env.example")
-  .argument("[path]", "Path to the project", ".")
-  .action(async (projectPath: string) => {
-    const { resolveProjectPath } = await import("./utils/monorepo.js");
-    const resolvedPath = await resolveProjectPath(projectPath || ".");
-    const { runEnvCommand } = await import("./cli/env.js");
-    await runEnvCommand(resolvedPath);
-  });
-
 // Subcommand: doctor
 program
   .command("doctor")

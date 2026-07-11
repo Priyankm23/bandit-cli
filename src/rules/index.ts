@@ -6,6 +6,7 @@ import { ruleEnvExampleExists } from "./mvp.rules.js";
 import { ruleEnvInGitignore } from "./mvp.rules.js";
 import { ruleDockerfileExists } from "./mvp.rules.js";
 import { ruleHasTestScript } from "./mvp.rules.js";
+import { ruleEnvKeysMatch } from "./mvp.rules.js";
 import {
   ruleSrcFolderExists,
   ruleDetectFramework,
@@ -26,6 +27,7 @@ export const rules: Rule[] = [
   ruleEnvExists,
   ruleEnvExampleExists,
   ruleEnvInGitignore,
+  ruleEnvKeysMatch,
   ruleDockerfileExists,
   ruleHasTestScript,
 

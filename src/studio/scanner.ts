@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { scanForRoutes, DiscoveredRoute } from "../cli/api.js";
 import { StudioDB } from "./db.js";
 
@@ -6,6 +8,7 @@ export interface BlueprintNode {
   label: string;
   type: "route" | "controller" | "service" | "database" | "cache";
   details?: string;
+  authStatus?: "Protected" | "Public";
   metrics?: {
     rps: number;
     p99: number;
@@ -56,11 +59,32 @@ export async function generateApiBlueprint(projectPath: string): Promise<Bluepri
     const matchBench = benchmarks.find(b => b.targetUrl.endsWith(r.routePath));
     const metrics = matchBench ? { rps: matchBench.rps, p99: matchBench.latency.p99, avg: matchBench.latency.avg } : undefined;
 
+    // Static Auth Status Detection
+    let authStatus: "Protected" | "Public" = "Public";
+    try {
+      const fullPath = path.resolve(projectPath, r.sourceFile);
+      if (fs.existsSync(fullPath)) {
+        const fileContent = fs.readFileSync(fullPath, "utf-8");
+        const lines = fileContent.split("\n");
+        // Check if any line defining this path contains auth keywords
+        const matchingLine = lines.find(line => 
+          line.includes(r.routePath) || 
+          (line.includes(r.method.toLowerCase()) && line.includes(r.routePath.split("/").pop() || "___"))
+        );
+        if (matchingLine) {
+          const authKeywords = ["auth", "protect", "require", "jwt", "session", "admin", "vendor", "guard", "cookie"];
+          const hasAuth = authKeywords.some(kw => matchingLine.toLowerCase().includes(kw));
+          if (hasAuth) authStatus = "Protected";
+        }
+      }
+    } catch {}
+
     nodes.push({
       id: routeId,
       label: routeLabel,
       type: "route",
       details: r.sourceFile,
+      authStatus,
       metrics,
     });
 

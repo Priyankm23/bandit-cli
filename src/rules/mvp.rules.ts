@@ -153,3 +153,120 @@ export const ruleHasTestScript: Rule = {
     };
   },
 };
+
+function parseEnvContent(content: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const firstEqual = trimmed.indexOf("=");
+    if (firstEqual === -1) continue;
+
+    const key = trimmed.slice(0, firstEqual).trim();
+    let val = trimmed.slice(firstEqual + 1).trim();
+
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1);
+    }
+    map.set(key, val);
+  }
+  return map;
+}
+
+export const ruleEnvKeysMatch: Rule = {
+  id: "env-keys-match",
+  title: ".env aligns with .env.example",
+  severity: "warn",
+  async run(ctx) {
+    const envPath = path.join(ctx.projectPath, ".env");
+    const envExamplePath = path.join(ctx.projectPath, ".env.example");
+
+    if (!exists(envPath) || !exists(envExamplePath)) {
+      return {
+        id: this.id,
+        title: this.title,
+        severity: this.severity,
+        status: "skip",
+        details: "Requires both .env and .env.example files to run comparison.",
+      };
+    }
+
+    try {
+      const envContent = readText(envPath) || "";
+      const exampleContent = readText(envExamplePath) || "";
+
+      const envKeys = parseEnvContent(envContent);
+      const exampleKeys = parseEnvContent(exampleContent);
+
+      const missing: string[] = [];
+      const extra: string[] = [];
+      const placeholders: string[] = [];
+
+      for (const key of exampleKeys.keys()) {
+        if (!envKeys.has(key)) {
+          missing.push(key);
+        } else {
+          const val = envKeys.get(key)!;
+          if (
+            val === "" ||
+            val === "your_key_here" ||
+            val === "placeholder" ||
+            val.includes("TODO")
+          ) {
+            placeholders.push(key);
+          }
+        }
+      }
+
+      for (const key of envKeys.keys()) {
+        if (!exampleKeys.has(key)) {
+          extra.push(key);
+        }
+      }
+
+      if (missing.length === 0 && extra.length === 0 && placeholders.length === 0) {
+        return {
+          id: this.id,
+          title: this.title,
+          severity: this.severity,
+          status: "pass",
+          details: ".env has all keys defined in .env.example with active values.",
+        };
+      }
+
+      const issues: string[] = [];
+      if (missing.length > 0) {
+        issues.push(`Missing keys: ${missing.join(", ")}`);
+      }
+      if (placeholders.length > 0) {
+        issues.push(`Placeholder/Empty values: ${placeholders.join(", ")}`);
+      }
+      if (extra.length > 0) {
+        issues.push(`Extra keys: ${extra.join(", ")}`);
+      }
+
+      return {
+        id: this.id,
+        title: this.title,
+        severity: this.severity,
+        status: "fail",
+        details: issues.join(" | "),
+        suggestion: "Update your .env or .env.example to keep them in sync and replace any placeholders.",
+      };
+    } catch (err: any) {
+      return {
+        id: this.id,
+        title: this.title,
+        severity: this.severity,
+        status: "fail",
+        details: `Failed to compare env files: ${err.message}`,
+        suggestion: "Ensure env files are valid text files.",
+      };
+    }
+  },
+};

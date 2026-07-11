@@ -7,6 +7,25 @@ import chalk from "chalk";
 interface Service {
   name: string;
   path: string;
+  framework: string;
+}
+
+function detectFramework(pkg: any): string {
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  const frameworks: Record<string, string> = {
+    express: "Express",
+    "@nestjs/core": "NestJS",
+    fastify: "Fastify",
+    koa: "Koa",
+    hapi: "Hapi",
+  };
+
+  for (const [dep, label] of Object.entries(frameworks)) {
+    if (deps[dep]) {
+      return label;
+    }
+  }
+  return "gRPC / Library";
 }
 
 export async function resolveProjectPath(inputPath: string = "."): Promise<string> {
@@ -35,6 +54,7 @@ export async function resolveProjectPath(inputPath: string = "."): Promise<strin
       services.push({
         name: pkg.name || path.basename(dir),
         path: dir,
+        framework: detectFramework(pkg),
       });
     } catch {}
   }
@@ -48,9 +68,12 @@ export async function resolveProjectPath(inputPath: string = "."): Promise<strin
 
   const options = services.map((s) => {
     const relPath = path.relative(absoluteRoot, s.path) || ".";
+    const fwLabel = s.framework === "gRPC / Library"
+      ? chalk.dim(s.framework)
+      : chalk.cyan(s.framework);
     return {
       value: s.path,
-      label: `${chalk.bold.green(s.name)} ${chalk.gray(`(${relPath})`)}`,
+      label: `${chalk.bold.green(s.name)} ${chalk.gray(`(${relPath})`)} - ${fwLabel}`,
     };
   });
 
